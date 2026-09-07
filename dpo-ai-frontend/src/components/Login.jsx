@@ -24,11 +24,12 @@ export default function Login({ onAuthenticated, onSwitchToSignup }) {
     try {
       const response = await fetch(`${API_URL}/api/v1/auth/login`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: form.email.trim(), password: form.password })
       });
       const data = await response.json();
-      if (!response.ok || !data.token) throw new Error(data.error || 'Unable to sign in.');
+      if (!response.ok || !data.user) throw new Error(data.error || 'Unable to sign in.');
       onAuthenticated(data);
     } catch (requestError) {
       setError(requestError.message || 'Unable to sign in. Check that the backend is running.');

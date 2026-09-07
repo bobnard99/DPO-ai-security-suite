@@ -5,7 +5,7 @@ import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import AuditLog from '../models/AuditLog.js';
 import { anonymizeText } from '../utils/anonymizer.js';
-import { RWANDA_DATA_PRIVACY_PROMPT } from '../utils/SystemPrompt.js';
+import { DPO_AGENT_PROMPT } from '../utils/SystemPrompt.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
@@ -18,6 +18,93 @@ const sendSseEvent = (res, payload) => {
     res.write(`data: ${JSON.stringify(payload)}\n\n`);
 };
 
+const getComplianceScore = (report) => {
+    const scoreMatch = report.match(/(?:Compliance Score|Compliance health index):\s*\[?(\d{1,3})\]?\/100/i);
+    return scoreMatch ? Math.min(100, Number(scoreMatch[1])) : 0;
+};
+
+const parseAuditMetadata = (report) => {
+    const metadataMatch = report.match(/```json\s*([\s\S]*?)\s*```/i);
+    if (!metadataMatch) return null;
+
+    try {
+        const parsed = JSON.parse(metadataMatch[1]);
+        const numberOrZero = (value) => Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0;
+        const remediationTasks = Array.isArray(parsed.remediationTasks)
+            ? parsed.remediationTasks.filter((task) => typeof task === 'string').slice(0, 3)
+            : [];
+
+        return {
+            parsedHealthIndex: Math.min(100, numberOrZero(parsed.parsedHealthIndex)),
+            article46Breaches: numberOrZero(parsed.article46Breaches),
+            article54Breaches: numberOrZero(parsed.article54Breaches),
+            article9Breaches: numberOrZero(parsed.article9Breaches),
+            remediationTasks
+        };
+    } catch {
+        return null;
+    }
+};
+
+const getAuditScore = (report, metadata) => metadata?.parsedHealthIndex ?? getComplianceScore(report);
+
+const hasCompleteAudit = (report) => {
+    const requiredSections = [
+        '# DPO LEGAL & SECURITY COMPLIANCE REPORT',
+        '## 1. Executive Summary',
+        '## 2. Structural Vulnerability Matrix',
+        '## 3. Statutory Mapping & Regulatory Fines',
+        '## 4. Priority Remediation Roadmap',
+        '## 5. Proposed Compliant Text Draft'
+    ];
+    return requiredSections.every((section) => report.includes(section)) && Boolean(parseAuditMetadata(report));
+};
+
+export const analyzeAuditText = async (req, res) => {
+    const { textToAnalyze, documentText, documentType } = req.body ?? {};
+    const sourceText = typeof textToAnalyze === 'string' ? textToAnalyze : documentText;
+
+    if (typeof sourceText !== 'string' || !sourceText.trim()) {
+        return res.status(400).json({ success: false, error: 'Text to analyze is required.' });
+    }
+    if (!openai.apiKey) {
+        return res.status(500).json({ success: false, error: 'Groq API is not configured.' });
+    }
+
+    try {
+        const response = await openai.chat.completions.create({
+            model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
+            messages: [
+                { role: 'system', content: DPO_AGENT_PROMPT },
+                { role: 'user', content: `Audit this document:\n\n${anonymizeText(sourceText)}` }
+            ],
+            max_tokens: 6000,
+            temperature: 0.1
+        });
+        const report = response.choices?.[0]?.message?.content || '';
+        const metadata = parseAuditMetadata(report);
+        const score = getAuditScore(report, metadata);
+
+        await AuditLog.create({
+            userId: req.user._id,
+            documentType: documentType || 'Other',
+            characterCount: sourceText.length,
+            complianceScore: score,
+            status: 'Completed'
+        });
+
+        return res.json({
+            success: true,
+            complianceHealthIndex: `Compliance health index: ${score}/100`,
+            metadata,
+            report
+        });
+    } catch (error) {
+        console.error('AI Controller Error:', error.message);
+        return res.status(500).json({ success: false, error: 'The compliance audit could not be completed.' });
+    }
+};
+
 export const streamAudit = async (req, res) => {
     const { documentText, documentType } = req.body ?? {};
     let sourceText = typeof documentText === 'string' ? documentText : '';
@@ -28,6 +115,13 @@ export const streamAudit = async (req, res) => {
             const extension = uploadedFile.name.toLowerCase().split('.').pop();
             if (!['pdf', 'docx'].includes(extension)) {
                 return res.status(400).json({ error: 'Only PDF and DOCX files are supported.' });
+            }
+
+            const header = uploadedFile.data.subarray(0, 5).toString('ascii');
+            const isPdf = extension === 'pdf' && header === '%PDF-';
+            const isDocx = extension === 'docx' && uploadedFile.data[0] === 0x50 && uploadedFile.data[1] === 0x4b;
+            if (!isPdf && !isDocx) {
+                return res.status(400).json({ error: 'The uploaded file type could not be verified.' });
             }
 
             if (extension === 'pdf') {
@@ -67,22 +161,31 @@ export const streamAudit = async (req, res) => {
         const stream = await openai.chat.completions.create({
             model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
             messages: [
-                { role: "system", content: RWANDA_DATA_PRIVACY_PROMPT },
+                { role: 'system', content: DPO_AGENT_PROMPT },
                 { role: 'user', content: `Audit this document:\n\n${cleanedText}` }
             ],
+            max_tokens: 6000,
+            temperature: 0.1,
             stream: true,
         });
 
+        let finishReason = null;
         for await (const chunk of stream) {
             const content = chunk.choices?.[0]?.delta?.content || '';
+            finishReason = chunk.choices?.[0]?.finish_reason || finishReason;
             if (content) {
                 fullAIResponse += content;
                 sendSseEvent(res, { text: content });
             }
         }
 
-        const scoreMatch = fullAIResponse.match(/^Compliance Score:\s*(\d{1,3})\/100/im);
-        const score = scoreMatch ? Math.min(100, Number(scoreMatch[1])) : 0;
+        const metadata = parseAuditMetadata(fullAIResponse);
+        const score = getAuditScore(fullAIResponse, metadata);
+
+        if (finishReason === 'length' || !hasCompleteAudit(fullAIResponse)) {
+            sendSseEvent(res, { error: 'The audit report was incomplete. Please retry the audit.' });
+            return res.end();
+        }
 
         if (req.user?._id) {
             await AuditLog.create({
@@ -94,7 +197,7 @@ export const streamAudit = async (req, res) => {
             });
         }
 
-        sendSseEvent(res, { done: true, score });
+        sendSseEvent(res, { done: true, score, metadata });
         res.end();
     } catch (error) {
         console.error('AI Controller Error:', error.message);

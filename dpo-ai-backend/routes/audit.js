@@ -1,9 +1,10 @@
 import express from 'express';
-import { streamAudit } from '../Controllers/auditController.js';
-import { protect } from '../middleware/auth.js';
+import { analyzeAuditText, streamAudit } from '../Controllers/auditController.js';
+import { authMiddleware, protect } from '../middleware/auth.js';
 
 const router = express.Router();
 
 router.post('/audit-stream', protect, streamAudit);
+router.post('/analyze', authMiddleware, analyzeAuditText);
 
 export default router;

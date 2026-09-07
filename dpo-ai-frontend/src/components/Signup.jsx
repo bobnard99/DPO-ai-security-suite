@@ -24,11 +24,12 @@ export default function Signup({ onAuthenticated, onSwitchToLogin }) {
     try {
       const response = await fetch(`${API_URL}/api/v1/auth/register`, {
         method: 'POST',
+        credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ ...form, name: form.name.trim(), companyName: form.companyName.trim(), email: form.email.trim() })
       });
       const data = await response.json();
-      if (!response.ok || !data.token) throw new Error(data.error || 'Unable to create your account.');
+      if (!response.ok || !data.user) throw new Error(data.error || 'Unable to create your account.');
       onAuthenticated(data);
     } catch (requestError) {
       setError(requestError.message || 'Unable to create your account. Check that the backend is running.');

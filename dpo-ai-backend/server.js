@@ -3,6 +3,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import fileUpload from 'express-fileupload';
+import helmet from 'helmet';
+import rateLimit from 'express-rate-limit';
 import { fileURLToPath } from 'node:url';
 import mongoose from 'mongoose';
 import auditRoutes from './routes/audit.js';
@@ -12,13 +14,19 @@ dotenv.config({ path: fileURLToPath(new URL('./.env', import.meta.url)) });
 
 const app = express();
 const PORT = process.env.PORT || 5000;
+const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 20, standardHeaders: 'draft-8', legacyHeaders: false });
+const auditLimiter = rateLimit({ windowMs: 15 * 60 * 1000, limit: 10, standardHeaders: 'draft-8', legacyHeaders: false });
 
 // Middleware z'ibanze
-const allowedOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || 'http://localhost:5173')
+const configuredOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL || 'http://localhost:5173')
     .split(',')
     .map((origin) => origin.trim())
     .filter(Boolean);
+const allowedOrigins = process.env.NODE_ENV === 'production'
+    ? configuredOrigins
+    : [...new Set([...configuredOrigins, 'http://localhost:5173', 'http://127.0.0.1:5173'])];
 
+app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
     origin: (origin, callback) => {
         if (!origin || allowedOrigins.includes(origin)) {
@@ -36,7 +44,7 @@ app.use(fileUpload({
     createParentPath: false,
     useTempFiles: false
 }));
-app.use(express.json());
+app.use(express.json({ limit: '100kb' }));
 
 const connectDB = async () => {
     try {
@@ -49,15 +57,20 @@ const connectDB = async () => {
     }
 };
 
-connectDB();
-
-app.use('/api/v1/audit', auditRoutes);
-app.use('/api/v1/auth', authRoutes);
+app.use('/api/v1/audit', auditLimiter, auditRoutes);
+app.use('/api/v1/auth', authLimiter, authRoutes);
+app.use('/api/audit', auditLimiter, auditRoutes);
+app.use('/api/auth', authLimiter, authRoutes);
 
 app.get('/', (req, res) => {
     res.send('DPO AI Security Suite API is running.');
 });
 
-app.listen(PORT, () => {
-    console.log(`Backend server listening on http://localhost:${PORT}`);
-});
+const startServer = async () => {
+    await connectDB();
+    app.listen(PORT, () => {
+        console.log(`Backend server listening on http://localhost:${PORT}`);
+    });
+};
+
+startServer();

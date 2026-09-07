@@ -4,15 +4,31 @@ const rwandaPhoneRegex = /(?<!\d)(?:\+250[\s-]*|0)?7[2389](?:[\s-]?\d){7}(?!\d)/
 const emailRegex = /\b[a-zA-Z0-9.!#$%&'*+/=?^_`{|}~-]+@[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(?:\.[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+\b/g;
 const creditCardRegex = /(?<!\d)(?:\d[ -]?){13,19}(?!\d)/g;
 
+const createTokenReplacer = (prefix, tokenMap, counters) => (value) => {
+    if (!tokenMap.has(value)) {
+        counters[prefix] += 1;
+        tokenMap.set(value, `[${prefix}_${counters[prefix]}]`);
+    }
+    return tokenMap.get(value);
+};
+
 export const anonymizeText = (rawText) => {
     if (rawText === null || rawText === undefined) return "";
 
     let cleanedText = String(rawText);
-    cleanedText = cleanedText.replace(rwandaNationalIdRegex, "[REDACTED_NATIONAL_ID]");
-    cleanedText = cleanedText.replace(rwandaPhoneRegex, "[REDACTED_PHONE_NUMBER]");
-    cleanedText = cleanedText.replace(emailRegex, "[REDACTED_EMAIL]");
-    cleanedText = cleanedText.replace(creditCardRegex, "[REDACTED_CARD_NUMBER]");
-    cleanedText = cleanedText.replace(genericNationalIdRegex, "[REDACTED_NATIONAL_ID]");
+    const tokenMap = new Map();
+    const counters = { NATIONAL_ID: 0, PHONE: 0, EMAIL: 0, CARD: 0 };
+    const replaceNationalId = createTokenReplacer('NATIONAL_ID', tokenMap, counters);
+    const replacePhone = createTokenReplacer('PHONE', tokenMap, counters);
+    const replaceEmail = createTokenReplacer('EMAIL', tokenMap, counters);
+    const replaceCard = createTokenReplacer('CARD', tokenMap, counters);
+
+    // National IDs must be replaced before the broad card-number pattern.
+    cleanedText = cleanedText.replace(rwandaNationalIdRegex, replaceNationalId);
+    cleanedText = cleanedText.replace(genericNationalIdRegex, replaceNationalId);
+    cleanedText = cleanedText.replace(rwandaPhoneRegex, replacePhone);
+    cleanedText = cleanedText.replace(emailRegex, replaceEmail);
+    cleanedText = cleanedText.replace(creditCardRegex, replaceCard);
 
     return cleanedText;
 };

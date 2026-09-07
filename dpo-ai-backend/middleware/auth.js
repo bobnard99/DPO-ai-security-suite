@@ -5,11 +5,15 @@ import User from '../models/User.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
+const getSessionCookie = (header) => header.split(';').map((part) => part.trim()).find((part) => part.startsWith('dpo_session='))?.slice('dpo_session='.length);
+
 export const protect = async (req, res, next) => {
     const authorization = req.headers.authorization || '';
-    const [scheme, token] = authorization.split(' ');
+    const [scheme, bearerToken] = authorization.split(' ');
+    const cookieToken = getSessionCookie(req.headers.cookie || '');
+    const token = cookieToken || bearerToken;
 
-    if (scheme !== 'Bearer' || !token) {
+    if (!token || (!cookieToken && scheme !== 'Bearer')) {
         return res.status(401).json({ error: 'Authentication token is required.' });
     }
 
@@ -28,3 +32,5 @@ export const protect = async (req, res, next) => {
         return res.status(401).json({ error: 'Invalid or expired authentication token.' });
     }
 };
+
+export const authMiddleware = protect;

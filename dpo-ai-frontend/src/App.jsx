@@ -7,7 +7,7 @@ import './App.css';
 export default function App() {
   const [session, setSession] = useState(() => {
     try {
-      return JSON.parse(localStorage.getItem('dpoSession') || 'null');
+      return JSON.parse(sessionStorage.getItem('dpoSession') || 'null');
     } catch {
       return null;
     }
@@ -15,17 +15,21 @@ export default function App() {
   const [authMode, setAuthMode] = useState('login');
 
   const handleAuthenticated = (data) => {
-    localStorage.setItem('dpoSession', JSON.stringify(data));
-    setSession(data);
+    const nextSession = { user: data.user || data };
+    sessionStorage.setItem('dpoSession', JSON.stringify(nextSession));
+    localStorage.removeItem('dpoSession');
+    setSession(nextSession);
   };
 
   const handleSignOut = () => {
+    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    sessionStorage.removeItem('dpoSession');
     localStorage.removeItem('dpoSession');
     setSession(null);
     setAuthMode('login');
   };
 
-  if (session?.token) {
+  if (session?.user || session?.token) {
     return <AuditDashboard user={session.user || session} token={session.token} onSignOut={handleSignOut} />;
   }
 
