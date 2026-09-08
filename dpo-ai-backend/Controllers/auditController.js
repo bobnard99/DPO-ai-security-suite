@@ -33,13 +33,30 @@ const parseAuditMetadata = (report) => {
         const remediationTasks = Array.isArray(parsed.remediationTasks)
             ? parsed.remediationTasks.filter((task) => typeof task === 'string').slice(0, 3)
             : [];
+        const toolRequest = parsed.toolExecutionRequest;
+        const toolExecutionRequest = toolRequest && typeof toolRequest === 'object'
+            ? {
+                toolRequired: toolRequest.toolRequired === true,
+                toolName: typeof toolRequest.toolName === 'string' ? toolRequest.toolName : '',
+                arguments: toolRequest.arguments && typeof toolRequest.arguments === 'object'
+                    ? {
+                        score: typeof toolRequest.arguments.score === 'string' ? toolRequest.arguments.score : '',
+                        primaryViolation: typeof toolRequest.arguments.primaryViolation === 'string'
+                            ? toolRequest.arguments.primaryViolation.slice(0, 2000)
+                            : '',
+                        severity: typeof toolRequest.arguments.severity === 'string' ? toolRequest.arguments.severity : ''
+                    }
+                    : null
+            }
+            : null;
 
         return {
             parsedHealthIndex: Math.min(100, numberOrZero(parsed.parsedHealthIndex)),
             article46Breaches: numberOrZero(parsed.article46Breaches),
             article54Breaches: numberOrZero(parsed.article54Breaches),
             article9Breaches: numberOrZero(parsed.article9Breaches),
-            remediationTasks
+            remediationTasks,
+            toolExecutionRequest
         };
     } catch {
         return null;
@@ -48,16 +65,56 @@ const parseAuditMetadata = (report) => {
 
 const getAuditScore = (report, metadata) => metadata?.parsedHealthIndex ?? getComplianceScore(report);
 
+const triggerNCSAIncidentAlert = async (metadata, score) => {
+    const request = metadata?.toolExecutionRequest;
+    if (score >= 50 || request?.toolRequired !== true || request.toolName !== 'triggerNCSAIncidentAlert') {
+        return { status: 'not_required' };
+    }
+
+    const alertUrl = process.env.NCSA_ALERT_URL;
+    if (!alertUrl) {
+        console.warn('NCSA incident alert required but NCSA_ALERT_URL is not configured.');
+        return { status: 'not_configured' };
+    }
+
+    const payload = {
+        score: `${score}/100`,
+        primaryViolation: request.arguments?.primaryViolation || 'Critical compliance breach detected.',
+        severity: 'CRITICAL'
+    };
+    const headers = { 'Content-Type': 'application/json' };
+    if (process.env.NCSA_ALERT_TOKEN) headers.Authorization = `Bearer ${process.env.NCSA_ALERT_TOKEN}`;
+
+    try {
+        const response = await fetch(alertUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify(payload),
+            signal: AbortSignal.timeout(8000)
+        });
+        if (!response.ok) {
+            console.error(`NCSA incident alert failed with status ${response.status}.`);
+            return { status: 'failed', httpStatus: response.status };
+        }
+        return { status: 'sent' };
+    } catch (error) {
+        console.error('NCSA incident alert request failed:', error.message);
+        return { status: 'failed' };
+    }
+};
+
 const hasCompleteAudit = (report) => {
     const requiredSections = [
         '# DPO LEGAL & SECURITY COMPLIANCE REPORT',
         '## 1. Executive Summary',
         '## 2. Structural Vulnerability Matrix',
-        '## 3. Statutory Mapping & Regulatory Fines',
+        '## 3. RAG-Engine Statutory Mapping',
         '## 4. Priority Remediation Roadmap',
         '## 5. Proposed Compliant Text Draft'
     ];
-    return requiredSections.every((section) => report.includes(section)) && Boolean(parseAuditMetadata(report));
+    const hasSummary = report.includes('## 1. Executive Summary') || report.includes('## 1. Executive Summary & Health Index');
+    const hasMapping = report.includes('## 3. RAG-Engine Statutory Mapping') || report.includes('## 3. Statutory Mapping & Regulatory Fines');
+    return hasSummary && hasMapping && requiredSections.slice(1).every((section) => report.includes(section)) && Boolean(parseAuditMetadata(report));
 };
 
 export const analyzeAuditText = async (req, res) => {
@@ -84,6 +141,7 @@ export const analyzeAuditText = async (req, res) => {
         const report = response.choices?.[0]?.message?.content || '';
         const metadata = parseAuditMetadata(report);
         const score = getAuditScore(report, metadata);
+        const alert = await triggerNCSAIncidentAlert(metadata, score);
 
         await AuditLog.create({
             userId: req.user._id,
@@ -97,6 +155,7 @@ export const analyzeAuditText = async (req, res) => {
             success: true,
             complianceHealthIndex: `Compliance health index: ${score}/100`,
             metadata,
+            alert,
             report
         });
     } catch (error) {
@@ -187,6 +246,8 @@ export const streamAudit = async (req, res) => {
             return res.end();
         }
 
+        const alert = await triggerNCSAIncidentAlert(metadata, score);
+
         if (req.user?._id) {
             await AuditLog.create({
                 userId: req.user._id,
@@ -197,7 +258,7 @@ export const streamAudit = async (req, res) => {
             });
         }
 
-        sendSseEvent(res, { done: true, score, metadata });
+        sendSseEvent(res, { done: true, score, metadata, alert });
         res.end();
     } catch (error) {
         console.error('AI Controller Error:', error.message);
