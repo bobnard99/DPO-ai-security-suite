@@ -6,13 +6,16 @@ const AUDIT_URL = `${API_URL}/api/v1/audit/audit-stream`;
 const documentTypes = ['Privacy Policy', 'Terms of Service', 'Employment Contract', 'Vendor Agreement', 'Other'];
 
 const parseAuditMetadata = (report) => {
-  const metadataMatch = report.match(/```json\s*([\s\S]*?)\s*```/i);
-  if (!metadataMatch) return null;
-  try {
-    return JSON.parse(metadataMatch[1]);
-  } catch {
-    return null;
+  const metadataBlocks = [...report.matchAll(/```json\s*([\s\S]*?)\s*```/gi)];
+  for (const metadataBlock of metadataBlocks.reverse()) {
+    try {
+      const parsed = JSON.parse(metadataBlock[1].trim());
+      if (parsed?.parsedHealthIndex !== undefined) return parsed;
+    } catch {
+      // Continue to the next JSON block emitted by the model.
+    }
   }
+  return null;
 };
 
 export default function AuditDashboard({ user, token, onSignOut }) {
@@ -47,6 +50,7 @@ export default function AuditDashboard({ user, token, onSignOut }) {
         if (parsed.text) { fullText += parsed.text; setAuditResult((current) => current + parsed.text); }
         if (Number.isInteger(parsed.score)) setScore(parsed.score);
         if (parsed.metadata) { receivedMetadata = parsed.metadata; setMetadata(parsed.metadata); }
+        if (parsed.report) { fullText = parsed.report; setAuditResult(parsed.report); }
         if (parsed.done) finished = true;
       };
       while (!finished) {
@@ -64,8 +68,16 @@ export default function AuditDashboard({ user, token, onSignOut }) {
         const parsedMetadata = parseAuditMetadata(fullText);
         if (parsedMetadata) setMetadata(parsedMetadata);
       }
-      const requiredSections = ['# DPO LEGAL & SECURITY COMPLIANCE REPORT', '## 1. Executive Summary', '## 2. Structural Vulnerability Matrix', '## 3. Statutory Mapping & Regulatory Fines', '## 4. Priority Remediation Roadmap', '## 5. Proposed Compliant Text Draft'];
-      if (!requiredSections.every((section) => fullText.includes(section)) || !parseAuditMetadata(fullText)) {
+      const normalizedReport = fullText.replace(/\s+/g, ' ').toLowerCase();
+      const requiredSections = [
+        '# dpo legal & security compliance report',
+        '## 2. structural vulnerability matrix',
+        '## 4. priority remediation roadmap',
+        '## 5. proposed compliant text draft'
+      ];
+      const hasSummary = normalizedReport.includes('## 1. executive summary');
+      const hasMapping = normalizedReport.includes('## 3. rag-engine statutory mapping') || normalizedReport.includes('## 3. statutory mapping & regulatory fines');
+      if (!hasSummary || !hasMapping || !requiredSections.every((section) => normalizedReport.includes(section)) || !parseAuditMetadata(fullText)) {
         throw new Error('The audit report was incomplete. Please retry the audit.');
       }
       const scoreMatch = fullText.match(/(?:Compliance Score|Compliance health index):\s*\[?(\d{1,3})\]?\/100/i);

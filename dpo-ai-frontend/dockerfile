@@ -1,0 +1,16 @@
+# Use a lightweight Node Alpine environment to compile the Vite assembly
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+
+RUN npm install
+
+COPY . .
+
+# Expose Vite's production static serving environment port tracking layer
+EXPOSE 5173
+
+# Initialize the local frontend delivery pipeline mapping
+CMD ["npm", "run", "dev", "--", "--host"]

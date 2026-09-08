@@ -4,7 +4,7 @@ import { PDFParse } from 'pdf-parse';
 import dotenv from 'dotenv';
 import { fileURLToPath } from 'node:url';
 import AuditLog from '../models/AuditLog.js';
-import { anonymizeText } from '../utils/anonymizer.js';
+import { anonymizeTextWithMap, deanonymizeText } from '../utils/anonymizer.js';
 import { DPO_AGENT_PROMPT } from '../utils/SystemPrompt.js';
 
 dotenv.config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
@@ -24,11 +24,13 @@ const getComplianceScore = (report) => {
 };
 
 const parseAuditMetadata = (report) => {
-    const metadataMatch = report.match(/```json\s*([\s\S]*?)\s*```/i);
-    if (!metadataMatch) return null;
+    const metadataBlocks = [...report.matchAll(/```json\s*([\s\S]*?)\s*```/gi)];
+    if (metadataBlocks.length === 0) return null;
 
-    try {
-        const parsed = JSON.parse(metadataMatch[1]);
+    for (const metadataBlock of metadataBlocks.reverse()) {
+        try {
+            const parsed = JSON.parse(metadataBlock[1].trim());
+            if (!parsed || parsed.parsedHealthIndex === undefined) continue;
         const numberOrZero = (value) => Number.isFinite(Number(value)) ? Math.max(0, Math.round(Number(value))) : 0;
         const remediationTasks = Array.isArray(parsed.remediationTasks)
             ? parsed.remediationTasks.filter((task) => typeof task === 'string').slice(0, 3)
@@ -50,20 +52,33 @@ const parseAuditMetadata = (report) => {
             }
             : null;
 
-        return {
-            parsedHealthIndex: Math.min(100, numberOrZero(parsed.parsedHealthIndex)),
-            article46Breaches: numberOrZero(parsed.article46Breaches),
-            article54Breaches: numberOrZero(parsed.article54Breaches),
-            article9Breaches: numberOrZero(parsed.article9Breaches),
-            remediationTasks,
-            toolExecutionRequest
-        };
-    } catch {
-        return null;
+            return {
+                parsedHealthIndex: Math.min(100, numberOrZero(parsed.parsedHealthIndex)),
+                article46Breaches: numberOrZero(parsed.article46Breaches),
+                article54Breaches: numberOrZero(parsed.article54Breaches),
+                article9Breaches: numberOrZero(parsed.article9Breaches),
+                remediationTasks,
+                toolExecutionRequest
+            };
+        } catch {
+            // Try the next JSON block because the model may emit more than one.
+        }
     }
+
+    return null;
 };
 
 const getAuditScore = (report, metadata) => metadata?.parsedHealthIndex ?? getComplianceScore(report);
+
+const getComplianceHealthIndex = (report, metadata) => {
+    if (metadata?.parsedHealthIndex !== undefined) {
+        return `${metadata.parsedHealthIndex}/100`;
+    }
+
+    const healthIndexRegex = /(?:Compliance\s+)?Health\s+Index\s*:\s*([^\n.]+)/i;
+    const match = report.match(healthIndexRegex);
+    return match ? match[1].trim() : 'Analysis Complete';
+};
 
 const triggerNCSAIncidentAlert = async (metadata, score) => {
     const request = metadata?.toolExecutionRequest;
@@ -104,17 +119,17 @@ const triggerNCSAIncidentAlert = async (metadata, score) => {
 };
 
 const hasCompleteAudit = (report) => {
+    const normalizedReport = report.replace(/\s+/g, ' ').toLowerCase();
     const requiredSections = [
-        '# DPO LEGAL & SECURITY COMPLIANCE REPORT',
-        '## 1. Executive Summary',
-        '## 2. Structural Vulnerability Matrix',
-        '## 3. RAG-Engine Statutory Mapping',
-        '## 4. Priority Remediation Roadmap',
-        '## 5. Proposed Compliant Text Draft'
+        '# dpo legal & security compliance report',
+        '## 2. structural vulnerability matrix',
+        '## 4. priority remediation roadmap',
+        '## 5. proposed compliant text draft'
     ];
-    const hasSummary = report.includes('## 1. Executive Summary') || report.includes('## 1. Executive Summary & Health Index');
-    const hasMapping = report.includes('## 3. RAG-Engine Statutory Mapping') || report.includes('## 3. Statutory Mapping & Regulatory Fines');
-    return hasSummary && hasMapping && requiredSections.slice(1).every((section) => report.includes(section)) && Boolean(parseAuditMetadata(report));
+    const hasSummary = normalizedReport.includes('## 1. executive summary');
+    const hasMapping = normalizedReport.includes('## 3. rag-engine statutory mapping')
+        || normalizedReport.includes('## 3. statutory mapping & regulatory fines');
+    return hasSummary && hasMapping && requiredSections.every((section) => normalizedReport.includes(section)) && Boolean(parseAuditMetadata(report));
 };
 
 export const analyzeAuditText = async (req, res) => {
@@ -129,18 +144,21 @@ export const analyzeAuditText = async (req, res) => {
     }
 
     try {
+        const { text: anonymizedText, piMap } = anonymizeTextWithMap(sourceText);
         const response = await openai.chat.completions.create({
             model: process.env.GROQ_MODEL || 'llama-3.3-70b-versatile',
             messages: [
                 { role: 'system', content: DPO_AGENT_PROMPT },
-                { role: 'user', content: `Audit this document:\n\n${anonymizeText(sourceText)}` }
+                { role: 'user', content: `Audit this document:\n\n${anonymizedText}` }
             ],
             max_tokens: 6000,
             temperature: 0.1
         });
-        const report = response.choices?.[0]?.message?.content || '';
+        const aiResponse = response.choices?.[0]?.message?.content || '';
+        const report = deanonymizeText(aiResponse, piMap);
         const metadata = parseAuditMetadata(report);
         const score = getAuditScore(report, metadata);
+        const complianceHealthIndex = getComplianceHealthIndex(report, metadata);
         const alert = await triggerNCSAIncidentAlert(metadata, score);
 
         await AuditLog.create({
@@ -148,12 +166,14 @@ export const analyzeAuditText = async (req, res) => {
             documentType: documentType || 'Other',
             characterCount: sourceText.length,
             complianceScore: score,
+            complianceHealthIndex,
+            finalReport: report,
             status: 'Completed'
         });
 
         return res.json({
             success: true,
-            complianceHealthIndex: `Compliance health index: ${score}/100`,
+            complianceHealthIndex,
             metadata,
             alert,
             report
@@ -206,7 +226,7 @@ export const streamAudit = async (req, res) => {
         return res.status(500).json({ error: 'Groq API is not configured.' });
     }
 
-    const cleanedText = anonymizeText(sourceText);
+    const { text: cleanedText, piMap } = anonymizeTextWithMap(sourceText);
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
@@ -238,10 +258,12 @@ export const streamAudit = async (req, res) => {
             }
         }
 
-        const metadata = parseAuditMetadata(fullAIResponse);
-        const score = getAuditScore(fullAIResponse, metadata);
+        const finalReport = deanonymizeText(fullAIResponse, piMap);
+        const metadata = parseAuditMetadata(finalReport);
+        const score = getAuditScore(finalReport, metadata);
+        const complianceHealthIndex = getComplianceHealthIndex(finalReport, metadata);
 
-        if (finishReason === 'length' || !hasCompleteAudit(fullAIResponse)) {
+        if (finishReason === 'length' || !hasCompleteAudit(finalReport)) {
             sendSseEvent(res, { error: 'The audit report was incomplete. Please retry the audit.' });
             return res.end();
         }
@@ -254,11 +276,20 @@ export const streamAudit = async (req, res) => {
                 documentType: documentType || 'Other',
                 characterCount: sourceText.length,
                 complianceScore: score,
+                complianceHealthIndex,
+                finalReport,
                 status: 'Completed'
             });
         }
 
-        sendSseEvent(res, { done: true, score, metadata, alert });
+        sendSseEvent(res, {
+            done: true,
+            score,
+            complianceHealthIndex,
+            metadata,
+            report: finalReport,
+            alert
+        });
         res.end();
     } catch (error) {
         console.error('AI Controller Error:', error.message);

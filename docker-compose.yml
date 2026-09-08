@@ -1,0 +1,49 @@
+version: '3.8'
+
+services:
+  # Core Local Database Storage Instance (Data Residency Safeguard)
+  mongodb-container:
+    image: mongo:latest
+    container_name: dpo-mongo-db
+    ports:
+      - "27017:27017"
+    volumes:
+      - dpo-database-volume:/data/db
+    networks:
+      - dpo-secure-network
+
+  #  Express REST API Backend Implementation Execution Stream
+  backend-service:
+    build: ./dpo-ai-backend
+    container_name: dpo-backend-api
+    ports:
+      - "5000:5000"
+    environment:
+      - PORT=5000
+      - MONGO_URI=mongodb://mongodb-container:27017/dpo_compliance
+      - JWT_SECRET=your_super_secure_jwt_secret_signing_key_here
+      - GROQ_API_KEY=gsk_your_actual_groq_cloud_production_api_key_here
+    depends_on:
+      - mongodb-container
+    networks:
+      - dpo-secure-network
+
+  # Frontend Web Control Interface Panel (Vite Server Integration)
+  frontend-service:
+    build: ./dpo-ai-frontend
+    container_name: dpo-frontend-dashboard
+    ports:
+      - "5173:5173"
+    environment:
+      - VITE_API_URL=http://localhost:5000/api
+    depends_on:
+      - backend-service
+    networks:
+      - dpo-secure-network
+
+volumes:
+  dpo-database-volume:
+
+networks:
+  dpo-secure-network:
+    driver: bridge

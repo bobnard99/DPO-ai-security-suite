@@ -28,6 +28,15 @@ const auditLogSchema = new mongoose.Schema({
         min: 0,
         max: 100
     },
+    complianceHealthIndex: {
+        type: String,
+        required: true,
+        trim: true
+    },
+    finalReport: {
+        type: String,
+        required: true
+    },
     status: {
         type: String,
         enum: ['Completed', 'Failed'],

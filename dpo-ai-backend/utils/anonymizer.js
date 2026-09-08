@@ -12,8 +12,8 @@ const createTokenReplacer = (prefix, tokenMap, counters) => (value) => {
     return tokenMap.get(value);
 };
 
-export const anonymizeText = (rawText) => {
-    if (rawText === null || rawText === undefined) return "";
+export const anonymizeTextWithMap = (rawText) => {
+    if (rawText === null || rawText === undefined) return { text: '', piMap: new Map() };
 
     let cleanedText = String(rawText);
     const tokenMap = new Map();
@@ -30,5 +30,13 @@ export const anonymizeText = (rawText) => {
     cleanedText = cleanedText.replace(emailRegex, replaceEmail);
     cleanedText = cleanedText.replace(creditCardRegex, replaceCard);
 
-    return cleanedText;
+    return { text: cleanedText, piMap: new Map([...tokenMap].map(([value, token]) => [token, value])) };
+};
+
+export const anonymizeText = (rawText) => anonymizeTextWithMap(rawText).text;
+
+export const deanonymizeText = (text, piMap) => {
+    if (typeof text !== 'string' || !(piMap instanceof Map)) return text || '';
+
+    return text.replace(/\[(?:NATIONAL_ID|PHONE|EMAIL|CARD)_\d+\]/g, (token) => piMap.get(token) || token);
 };
