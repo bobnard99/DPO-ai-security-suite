@@ -1,6 +1,10 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
+const API_ROOT = (import.meta.env.VITE_API_URL || 'http://localhost:5000')
+  .replace(/\/+$/, '')
+  .replace(/\/api$/, '');
+const AUDIT_URL = `${API_ROOT}/api/audit/analyze`;
 const documentTypes = ['Privacy Policy', 'Terms of Service', 'Employment Contract', 'Vendor Agreement', 'Other'];
 
 const parseAuditMetadata = (report) => {
@@ -30,11 +34,7 @@ export default function AuditDashboard({ user, token, onSignOut }) {
     if (!documentText.trim() || loading) return;
     setLoading(true); setAuditResult(''); setScore(null); setMetadata(null); setError('');
     try {
-      // 🚨 DYNAMIC NETWORK INJECTION: Bikura automatically isano ya Ngrok cyangwa Localhost iri gukoreshwa
-      const baseUrl = window.location.origin;
-      const dynamicAuditUrl = `${baseUrl}/api/audit/analyze`;
-
-      const response = await fetch(dynamicAuditUrl, {
+      const response = await fetch(AUDIT_URL, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
