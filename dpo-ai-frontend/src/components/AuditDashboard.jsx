@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
-const API_ROOT = (import.meta.env.VITE_API_URL || 'http://localhost:5000')
+const API_ROOT = (import.meta.env.VITE_API_URL || '')
   .replace(/\/+$/, '')
   .replace(/\/api$/, '');
 const AUDIT_URL = `${API_ROOT}/api/audit/analyze`;

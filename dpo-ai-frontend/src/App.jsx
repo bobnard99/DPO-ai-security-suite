@@ -22,7 +22,7 @@ export default function App() {
   };
 
   const handleSignOut = () => {
-    fetch(`${import.meta.env.VITE_API_URL || 'http://localhost:5000'}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
+    fetch(`${import.meta.env.VITE_API_URL || ''}/api/v1/auth/logout`, { method: 'POST', credentials: 'include' }).catch(() => {});
     sessionStorage.removeItem('dpoSession');
     localStorage.removeItem('dpoSession');
     setSession(null);
