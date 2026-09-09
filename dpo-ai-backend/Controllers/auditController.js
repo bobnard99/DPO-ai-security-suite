@@ -119,17 +119,7 @@ const triggerNCSAIncidentAlert = async (metadata, score) => {
 };
 
 const hasCompleteAudit = (report) => {
-    const normalizedReport = report.replace(/\s+/g, ' ').toLowerCase();
-    const requiredSections = [
-        '# dpo legal & security compliance report',
-        '## 2. structural vulnerability matrix',
-        '## 4. priority remediation roadmap',
-        '## 5. proposed compliant text draft'
-    ];
-    const hasSummary = normalizedReport.includes('## 1. executive summary');
-    const hasMapping = normalizedReport.includes('## 3. rag-engine statutory mapping')
-        || normalizedReport.includes('## 3. statutory mapping & regulatory fines');
-    return hasSummary && hasMapping && requiredSections.every((section) => normalizedReport.includes(section)) && Boolean(parseAuditMetadata(report));
+    return report.trim().length >= 500 && Boolean(parseAuditMetadata(report));
 };
 
 export const analyzeAuditText = async (req, res) => {

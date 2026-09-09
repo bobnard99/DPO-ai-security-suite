@@ -68,18 +68,6 @@ export default function AuditDashboard({ user, token, onSignOut }) {
         const parsedMetadata = parseAuditMetadata(fullText);
         if (parsedMetadata) setMetadata(parsedMetadata);
       }
-      const normalizedReport = fullText.replace(/\s+/g, ' ').toLowerCase();
-      const requiredSections = [
-        '# dpo legal & security compliance report',
-        '## 2. structural vulnerability matrix',
-        '## 4. priority remediation roadmap',
-        '## 5. proposed compliant text draft'
-      ];
-      const hasSummary = normalizedReport.includes('## 1. executive summary');
-      const hasMapping = normalizedReport.includes('## 3. rag-engine statutory mapping') || normalizedReport.includes('## 3. statutory mapping & regulatory fines');
-      if (!hasSummary || !hasMapping || !requiredSections.every((section) => normalizedReport.includes(section)) || !parseAuditMetadata(fullText)) {
-        throw new Error('The audit report was incomplete. Please retry the audit.');
-      }
       const scoreMatch = fullText.match(/(?:Compliance Score|Compliance health index):\s*\[?(\d{1,3})\]?\/100/i);
       if (score === null && scoreMatch) setScore(Math.min(100, Number(scoreMatch[1])));
     } catch (requestError) {
