@@ -1,9 +1,6 @@
 import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-const API_ROOT = API_URL.replace(/\/api\/?$/, '');
-const AUDIT_URL = `${API_ROOT}/api/audit/analyze`;
 const documentTypes = ['Privacy Policy', 'Terms of Service', 'Employment Contract', 'Vendor Agreement', 'Other'];
 
 const parseAuditMetadata = (report) => {
@@ -33,7 +30,11 @@ export default function AuditDashboard({ user, token, onSignOut }) {
     if (!documentText.trim() || loading) return;
     setLoading(true); setAuditResult(''); setScore(null); setMetadata(null); setError('');
     try {
-      const response = await fetch(AUDIT_URL, {
+      // 🚨 DYNAMIC NETWORK INJECTION: Bikura automatically isano ya Ngrok cyangwa Localhost iri gukoreshwa
+      const baseUrl = window.location.origin;
+      const dynamicAuditUrl = `${baseUrl}/api/audit/analyze`;
+
+      const response = await fetch(dynamicAuditUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -50,7 +51,11 @@ export default function AuditDashboard({ user, token, onSignOut }) {
 
       const report = result.report || '';
       const reportMetadata = result.metadata || parseAuditMetadata(report);
-      setAuditResult(report);
+
+      // 🚨 VISUAL SHIELD LAYER: Drop the trailing machine-readable JSON blocks from human eyes
+      const cleanReport = report.split('---')[0];
+
+      setAuditResult(cleanReport.trim());
       setMetadata(reportMetadata);
       setScore(reportMetadata?.parsedHealthIndex ?? null);
     } catch (requestError) {
@@ -68,9 +73,9 @@ export default function AuditDashboard({ user, token, onSignOut }) {
       </header>
       <section className="intro reveal-one"><p className="eyebrow">Privacy intelligence for teams</p><h1>Know where your policy<br /><span>stands.</span></h1><p className="intro-copy">Run a focused compliance review against Rwanda&apos;s Data Protection Law. Your document is anonymized before it reaches the audit model.</p></section>
       <section className="workspace reveal-two">
-        <div className="workspace-heading"><div><p className="section-kicker">01 / Source document</p><h2>Prepare your review</h2></div><span className="privacy-note"><span aria-hidden="true">&#9670;</span> Zero raw-text retention</span></div>
+        <div className="workspace-heading"><div><p className="section-kicker">01 / Source document</p><h2>Prepare your review</h2></div><span className="privacy-note"><span aria-hidden="true">◆</span> Zero raw-text retention</span></div>
         <div className="input-layout">
-          <div className="document-input"><div className="field-topline"><label htmlFor="document-type">Document type</label><span>{documentText.length.toLocaleString()} characters</span></div><select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)}>{documentTypes.map((type) => <option key={type}>{type}</option>)}</select><label htmlFor="document-file">Upload PDF or DOCX</label><input id="document-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} /><span className="file-name">{selectedFile ? selectedFile.name : 'No file selected'}</span><label className="sr-only" htmlFor="document-text">Document text</label><textarea id="document-text" value={documentText} onChange={(event) => setDocumentText(event.target.value)} placeholder="Paste a privacy policy, contract, or data handling procedure here..." spellCheck="false" /><div className="input-footer"><span>PII is filtered locally before analysis</span><button className="audit-button" onClick={handleStartAudit} disabled={loading || !documentText.trim()}>{loading ? 'Auditing document' : 'Start compliance audit'}<span aria-hidden="true">&#8594;</span></button></div></div>
+          <div className="document-input"><div className="field-topline"><label htmlFor="document-type">Document type</label><span>{documentText.length.toLocaleString()} characters</span></div><select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)}>{documentTypes.map((type) => <option key={type}>{type}</option>)}</select><label htmlFor="document-file">Upload PDF or DOCX</label><input id="document-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} /><span className="file-name">{selectedFile ? selectedFile.name : 'No file selected'}</span><label className="sr-only" htmlFor="document-text">Document text</label><textarea id="document-text" value={documentText} onChange={(event) => setDocumentText(event.target.value)} placeholder="Paste a privacy policy, contract, or data handling procedure here..." spellCheck="false" /><div className="input-footer"><span>PII is filtered locally before analysis</span><button className="audit-button" onClick={handleStartAudit} disabled={loading || !documentText.trim()}>{loading ? 'Auditing document' : 'Start compliance audit'}<span aria-hidden="true">→</span></button></div></div>
           <aside className="principles-panel"><p className="section-kicker">Audit lens</p><h3>What gets examined</h3><ul><li><span>01</span> Purpose and lawful basis</li><li><span>02</span> Data subject rights</li><li><span>03</span> Storage and security limits</li><li><span>04</span> Breach response obligations</li></ul><p className="panel-footnote">Built for the Rwanda compliance context, with practical remediation in every report.</p></aside>
         </div>
       </section>
