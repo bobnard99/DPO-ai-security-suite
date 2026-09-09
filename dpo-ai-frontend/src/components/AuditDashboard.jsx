@@ -2,7 +2,8 @@ import { useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
-const AUDIT_URL = `${API_URL}/api/v1/audit/audit-stream`;
+const API_ROOT = API_URL.replace(/\/api\/?$/, '');
+const AUDIT_URL = `${API_ROOT}/api/audit/analyze`;
 const documentTypes = ['Privacy Policy', 'Terms of Service', 'Employment Contract', 'Vendor Agreement', 'Other'];
 
 const parseAuditMetadata = (report) => {
@@ -29,49 +30,31 @@ export default function AuditDashboard({ user, token, onSignOut }) {
   const [selectedFile, setSelectedFile] = useState(null);
 
   const handleStartAudit = async () => {
-    if ((!documentText.trim() && !selectedFile) || loading) return;
+    if (!documentText.trim() || loading) return;
     setLoading(true); setAuditResult(''); setScore(null); setMetadata(null); setError('');
     try {
-      const formData = new FormData();
-      formData.append('documentType', documentType);
-      if (selectedFile) formData.append('file', selectedFile);
-      if (documentText.trim()) formData.append('documentText', documentText);
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
-      const response = await fetch(AUDIT_URL, { method: 'POST', headers, credentials: 'include', body: formData });
+      const response = await fetch(AUDIT_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {})
+        },
+        credentials: 'include',
+        body: JSON.stringify({ textToAnalyze: documentText, documentType })
+      });
       if (response.status === 401) { onSignOut(); return; }
-      if (!response.ok || !response.body) throw new Error(`Audit request failed with status ${response.status}`);
-      const reader = response.body.getReader(); const decoder = new TextDecoder();
-      let buffer = ''; let fullText = ''; let finished = false; let receivedMetadata = null;
-      const processEvent = (event) => {
-        const data = event.split('\n').filter((line) => line.startsWith('data:')).map((line) => line.slice(5).trimStart()).join('\n');
-        if (!data || data === '[DONE]') return;
-        const parsed = JSON.parse(data);
-        if (parsed.error) throw new Error(parsed.error);
-        if (parsed.text) { fullText += parsed.text; setAuditResult((current) => current + parsed.text); }
-        if (Number.isInteger(parsed.score)) setScore(parsed.score);
-        if (parsed.metadata) { receivedMetadata = parsed.metadata; setMetadata(parsed.metadata); }
-        if (parsed.report) { fullText = parsed.report; setAuditResult(parsed.report); }
-        if (parsed.done) finished = true;
-      };
-      while (!finished) {
-        const { value, done } = await reader.read();
-        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
-        const events = buffer.split('\n\n'); buffer = events.pop() || '';
-        for (const event of events) processEvent(event);
-        if (done) {
-          finished = true;
-          break;
-        }
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok || !result.success) {
+        throw new Error(result.error || `Audit request failed with status ${response.status}`);
       }
-      if (buffer.trim()) processEvent(buffer);
-      if (!receivedMetadata) {
-        const parsedMetadata = parseAuditMetadata(fullText);
-        if (parsedMetadata) setMetadata(parsedMetadata);
-      }
-      const scoreMatch = fullText.match(/(?:Compliance Score|Compliance health index):\s*\[?(\d{1,3})\]?\/100/i);
-      if (score === null && scoreMatch) setScore(Math.min(100, Number(scoreMatch[1])));
+
+      const report = result.report || '';
+      const reportMetadata = result.metadata || parseAuditMetadata(report);
+      setAuditResult(report);
+      setMetadata(reportMetadata);
+      setScore(reportMetadata?.parsedHealthIndex ?? null);
     } catch (requestError) {
-      console.error('Audit stream error:', requestError); setError(requestError.message || 'The audit could not be completed.');
+      console.error('Audit request error:', requestError); setError(requestError.message || 'The audit could not be completed.');
     } finally { setLoading(false); }
   };
 
@@ -87,7 +70,7 @@ export default function AuditDashboard({ user, token, onSignOut }) {
       <section className="workspace reveal-two">
         <div className="workspace-heading"><div><p className="section-kicker">01 / Source document</p><h2>Prepare your review</h2></div><span className="privacy-note"><span aria-hidden="true">&#9670;</span> Zero raw-text retention</span></div>
         <div className="input-layout">
-          <div className="document-input"><div className="field-topline"><label htmlFor="document-type">Document type</label><span>{documentText.length.toLocaleString()} characters</span></div><select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)}>{documentTypes.map((type) => <option key={type}>{type}</option>)}</select><label htmlFor="document-file">Upload PDF or DOCX</label><input id="document-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} /><span className="file-name">{selectedFile ? selectedFile.name : 'No file selected'}</span><label className="sr-only" htmlFor="document-text">Document text</label><textarea id="document-text" value={documentText} onChange={(event) => setDocumentText(event.target.value)} placeholder="Paste a privacy policy, contract, or data handling procedure here..." spellCheck="false" /><div className="input-footer"><span>PII is filtered locally before analysis</span><button className="audit-button" onClick={handleStartAudit} disabled={loading || (!documentText.trim() && !selectedFile)}>{loading ? 'Auditing document' : 'Start compliance audit'}<span aria-hidden="true">&#8594;</span></button></div></div>
+          <div className="document-input"><div className="field-topline"><label htmlFor="document-type">Document type</label><span>{documentText.length.toLocaleString()} characters</span></div><select id="document-type" value={documentType} onChange={(event) => setDocumentType(event.target.value)}>{documentTypes.map((type) => <option key={type}>{type}</option>)}</select><label htmlFor="document-file">Upload PDF or DOCX</label><input id="document-file" type="file" accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document" onChange={(event) => setSelectedFile(event.target.files?.[0] || null)} /><span className="file-name">{selectedFile ? selectedFile.name : 'No file selected'}</span><label className="sr-only" htmlFor="document-text">Document text</label><textarea id="document-text" value={documentText} onChange={(event) => setDocumentText(event.target.value)} placeholder="Paste a privacy policy, contract, or data handling procedure here..." spellCheck="false" /><div className="input-footer"><span>PII is filtered locally before analysis</span><button className="audit-button" onClick={handleStartAudit} disabled={loading || !documentText.trim()}>{loading ? 'Auditing document' : 'Start compliance audit'}<span aria-hidden="true">&#8594;</span></button></div></div>
           <aside className="principles-panel"><p className="section-kicker">Audit lens</p><h3>What gets examined</h3><ul><li><span>01</span> Purpose and lawful basis</li><li><span>02</span> Data subject rights</li><li><span>03</span> Storage and security limits</li><li><span>04</span> Breach response obligations</li></ul><p className="panel-footnote">Built for the Rwanda compliance context, with practical remediation in every report.</p></aside>
         </div>
       </section>
