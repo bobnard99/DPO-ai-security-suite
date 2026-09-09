@@ -25,11 +25,14 @@ const configuredOrigins = (process.env.FRONTEND_URLS || process.env.FRONTEND_URL
 const allowedOrigins = process.env.NODE_ENV === 'production'
     ? configuredOrigins
     : [...new Set([...configuredOrigins, 'http://localhost:5173', 'http://127.0.0.1:5173'])];
+const isAllowedOrigin = (origin) => !origin
+    || allowedOrigins.includes(origin)
+    || (process.env.NODE_ENV !== 'production' && /^https:\/\/([a-z0-9-]+\.)?ngrok-free\.dev$/i.test(origin));
 
 app.use(helmet({ crossOriginResourcePolicy: false }));
 app.use(cors({
     origin: (origin, callback) => {
-        if (!origin || allowedOrigins.includes(origin)) {
+        if (isAllowedOrigin(origin)) {
             return callback(null, true);
         }
         return callback(new Error('Origin is not allowed by CORS'));
